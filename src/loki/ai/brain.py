@@ -109,11 +109,13 @@ Please provide your answer with the following structure:
             "any other LiteLLM-compatible provider (OpenAI, Anthropic, Mistral, Groq, a "
             "local Ollama/vLLM server, or any OpenAI-compatible endpoint via `api_base`)."
         )
+        if last_error.is_rate_limited:
+            hint = "Wait for the quota/rate limit to reset, or select an available model with `/model`."
         return {
             "run_id": target_dir.name,
             "incident": incident_data,
             "diagnosis": (
-                f"⚠ **AI call failed** ({last_error}). Activated local diagnosis:\n\n"
+                f"⚠ **AI call failed** ({last_error.summary}). Activated local diagnosis:\n\n"
                 + self._local_diagnosis(incident_data, source_file)
                 + f"\n\n_Tip: {hint}_"
             ),
@@ -179,5 +181,5 @@ Respond ONLY with a valid JSON array of objects following this exact schema:
             return [{
                 "rule": "Business Rules Evaluation Error",
                 "status": "ERROR",
-                "observation": f"AI model evaluation error: {e}"
+                "observation": f"AI model evaluation error: {e.summary}"
             }]

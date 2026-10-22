@@ -28,12 +28,41 @@ _JSON_FENCE = re.compile(r"^```[\w-]*[ \t]*\n(.*?)\n?```$", re.DOTALL)
 Messages = list[dict[str, Any]]
 
 
+def _error_summary(message: str, cause: Exception | None) -> tuple[str, bool]:
+    """Keep the provider's main message, not its diagnostic JSON envelope."""
+    raw = str(cause) if cause is not None else message
+    kind = type(cause).__name__ if cause is not None else "LLMError"
+    rate_limited = str(getattr(cause, "status_code", "")) == "429" or any(
+        marker in f"{kind} {raw}".lower() for marker in ("ratelimiterror", "resource_exhausted")
+    )
+    rate_limited = rate_limited or bool(re.search(r"\b(?:HTTP(?: status)?|status(?:_code)?|error code)\s*[:=]?\s*429\b", raw, re.IGNORECASE))
+    start = raw.find("{")
+    if start >= 0:
+        prefix = raw[:start].strip()
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(raw[start:])
+        except (json.JSONDecodeError, RecursionError):
+            raw = prefix
+        else:
+            detail = payload.get("error", payload) if isinstance(payload, dict) else {}
+            if isinstance(detail, dict):
+                rate_limited = rate_limited or str(detail.get("code", "")) == "429"
+                main_message = detail.get("message")
+                raw = main_message if isinstance(main_message, str) else prefix
+            else:
+                raw = prefix
+    concise = " ".join(raw.split())
+    summary = f"{kind}: {concise}" if concise else kind
+    return (summary if len(summary) <= 240 else summary[:237] + "..."), rate_limited
+
+
 class LLMError(Exception):
-    """Every connection attempt failed. `last_error` holds the final underlying cause."""
+    """Failed call with a display summary; `last_error` retains the underlying cause."""
 
     def __init__(self, message: str, last_error: Exception | None = None):
         super().__init__(message)
         self.last_error = last_error
+        self.summary, self.is_rate_limited = _error_summary(message, last_error)
 
 
 class LLMUnavailableError(LLMError):

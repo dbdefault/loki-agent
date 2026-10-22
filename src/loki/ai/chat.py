@@ -22,6 +22,7 @@ from loki.config import (
 from loki.engine.updater import check_for_updates, print_update_banner, perform_update
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from rich.status import Status
@@ -624,10 +625,13 @@ Project & Testing Context:
 
                 self.history.append({"role": "assistant", "content": "".join(collected)})
                 success = True
-            except llm.LLMUnavailableError:
-                self.console.print("\n[bold red]AI Error:[/bold red] Service currently experiencing high demand. Please try again in a moment.")
+            except llm.LLMUnavailableError as e:
+                self.console.print(f"\n[bold red]AI Error:[/bold red] {escape(e.summary)}. Please try again in a moment.")
             except Exception as e:
-                self.console.print(f"\n[bold red]AI Error:[/bold red] {e}")
+                error = e if isinstance(e, llm.LLMError) else llm.LLMError(str(e), e)
+                self.console.print(f"\n[bold red]AI Error:[/bold red] {escape(error.summary)}")
+                if error.is_rate_limited:
+                    self.console.print("[dim]Wait for the quota/rate limit to reset, or select an available model with /model.[/dim]")
 
             if not success and self.history and self.history[-1].get("role") == "user":
                 self.history.pop()

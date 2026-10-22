@@ -113,3 +113,78 @@ def test_open_stream_all_transient_is_unavailable(default_connection, monkeypatc
     _fake_completion(monkeypatch, [RuntimeError("timeout")] * 4)
     with pytest.raises(llm.LLMUnavailableError):
         llm.open_stream([])
+
+
+@pytest.mark.parametrize("cause, expected", [
+    (ValueError("Missing API key.\nConfigure a key first."), "Missing API key. Configure a key first."),
+    (TimeoutError("Request timed out.\nTry again later."), "Request timed out. Try again later."),
+    (ConnectionError("Could not connect to provider."), "Could not connect to provider."),
+])
+def test_error_summary_is_one_line_and_preserves_cause(cause, expected):
+    error = llm.LLMError(str(cause), cause)
+    assert error.summary == f"{type(cause).__name__}: {expected}"
+    assert error.last_error is cause
+    assert not error.is_rate_limited
+
+
+def test_error_summary_extracts_provider_message_without_payload():
+    class RateLimitError(Exception):
+        status_code = 429
+
+    cause = RateLimitError(
+        'provider - {"error": {"code": 429, "message": "Free-tier quota exceeded.\\nRetry later.", '
+        '"status": "RESOURCE_EXHAUSTED", "details": [{"debug": "synthetic-payload-canary"}]}}'
+    )
+    error = llm.LLMError(str(cause), cause)
+    assert error.summary == "RateLimitError: Free-tier quota exceeded. Retry later."
+    assert error.is_rate_limited
+    assert error.last_error is cause
+    assert "synthetic-payload-canary" not in error.summary
+    assert "{" not in error.summary
+
+
+@pytest.mark.parametrize("message", [
+    'RESOURCE_EXHAUSTED: {"error": {"message": "Quota exhausted"}}',
+    '{"error": {"code": 429, "message": "Too many requests"}}',
+    'litellm.RateLimitError: request limit reached',
+    'HTTP 429: Too many requests',
+])
+def test_rate_limit_detection_without_concrete_provider_exception(message):
+    error = llm.LLMError(message, RuntimeError(message))
+    assert error.is_rate_limited
+
+
+def test_rate_limit_detection_uses_http_status():
+    cause = RuntimeError("Too many requests")
+    cause.status_code = 429
+    assert llm.LLMError(str(cause), cause).is_rate_limited
+
+
+@pytest.mark.parametrize("message", [
+    'provider - {"error": broken-json',
+    'provider - {"error": {"details": ["synthetic-payload-canary"]}}',
+])
+def test_error_summary_does_not_dump_unusable_json(message):
+    error = llm.LLMError(message, RuntimeError(message))
+    assert error.summary == "RuntimeError: provider -"
+    assert "{" not in error.summary
+
+
+def test_error_summary_is_bounded_and_supports_message_only_errors():
+    error = llm.LLMError("x" * 1000)
+    assert len(error.summary) <= 240
+    assert error.summary.endswith("...")
+    assert error.last_error is None
+    assert not error.is_rate_limited
+
+
+def test_deeply_nested_diagnostic_json_does_not_hide_original_error():
+    raw = 'provider - ' + '{"error":' * 2000 + '0' + '}' * 2000
+    cause = RuntimeError(raw)
+    error = llm.LLMError(raw, cause)
+    assert error.summary == "RuntimeError: provider -"
+    assert error.last_error is cause
+
+
+def test_unrelated_number_is_not_an_http_status():
+    assert not llm.LLMError("Received 429 bytes").is_rate_limited
