@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import typer
 import json
+import math
 
 # Ensure standard output streams support UTF-8 on Windows
 if hasattr(sys.stdout, "reconfigure"):
@@ -352,10 +353,16 @@ def init(
         )
     )
 
+def _validate_fault_rate(value: float | None) -> float | None:
+    if value is not None and not math.isfinite(value):
+        raise typer.BadParameter("must be a finite probability between 0.0 and 1.0")
+    return value
+
+
 @app.command()
 def run(
     url: str | None = typer.Argument(None, help="The target URL to test (defaults to .loki/config.yaml if omitted)"),
-    duration: int | None = typer.Option(None, "--duration", "-d", help="Execution duration in seconds"),
+    duration: int | None = typer.Option(None, "--duration", "-d", min=1, help="Execution duration in seconds"),
     headed: bool = typer.Option(False, "--headed", help="Run browser in visible mode (default is headless)"),
     persona: PersonaChoice | None = typer.Option(
         None,
@@ -448,6 +455,9 @@ def run(
     fault_rate: float | None = typer.Option(
         None,
         "--fault-rate",
+        min=0.0,
+        max=1.0,
+        callback=_validate_fault_rate,
         help="Probability (0.0 to 1.0) of injecting faults into eligible API requests (default: 0.3)",
     ),
     auth_chaos: bool | None = typer.Option(
